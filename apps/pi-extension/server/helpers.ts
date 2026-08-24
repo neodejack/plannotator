@@ -3,8 +3,23 @@
  * parseBody, parseJsonBody, json, handleApiNotFound, html, send, toWebRequest
  */
 
-import type { IncomingMessage } from "node:http";
+import { createHash } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+
+const STATIC_HTML_CACHE_CONTROL = "private, no-cache";
+
+function matchesIfNoneMatch(
+	value: string | string[] | undefined,
+	etag: string,
+): boolean {
+	if (value === undefined) return false;
+	const header = Array.isArray(value) ? value.join(",") : value;
+	return header.split(",").some((candidate) => {
+		const tag = candidate.trim();
+		return tag === "*" || tag === etag || tag === `W/${etag}`;
+	});
+}
 
 /** The raw request body as text (for endpoints where an empty body is meaningful, e.g. all-optional JSON). */
 export function readBody(req: IncomingMessage): Promise<string> {
@@ -54,12 +69,40 @@ export function handleApiNotFound(
 	json(res, { error: "Not found", path }, 404);
 }
 
-export function html(
-	res: import("node:http").ServerResponse,
+/**
+ * Create a cache-aware responder for one immutable-in-process SPA build.
+ *
+ * The application HTML is static for the server lifetime while session data
+ * is fetched separately from `/api/*`. Hash once when the server starts, then
+ * let browsers revalidate their stored copy without retransmitting the large
+ * single-file bundle.
+ */
+export function createHtmlResponder(
 	content: string,
-): void {
-	res.writeHead(200, { "Content-Type": "text/html" });
-	res.end(content);
+): (req: IncomingMessage, res: ServerResponse) => void {
+	const etag = `"sha256-${createHash("sha256").update(content).digest("base64url")}"`;
+	const contentLength = Buffer.byteLength(content);
+
+	return (req, res) => {
+		const isRetrieval = req.method === "GET" || req.method === "HEAD";
+		const commonHeaders = {
+			"Cache-Control": STATIC_HTML_CACHE_CONTROL,
+			ETag: etag,
+		};
+
+		if (isRetrieval && matchesIfNoneMatch(req.headers["if-none-match"], etag)) {
+			res.writeHead(304, commonHeaders);
+			res.end();
+			return;
+		}
+
+		res.writeHead(200, {
+			"Content-Type": "text/html; charset=utf-8",
+			"Content-Length": String(contentLength),
+			...commonHeaders,
+		});
+		res.end(req.method === "HEAD" ? undefined : content);
+	};
 }
 
 export function send(

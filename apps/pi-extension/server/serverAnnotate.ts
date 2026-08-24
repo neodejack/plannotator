@@ -42,7 +42,7 @@ import {
 	handleSaveNotesRequest,
 	handleUploadRequest,
 } from "./handlers.ts";
-import { handleApiNotFound, html, json, parseBody, requestUrl } from "./helpers.ts";
+import { createHtmlResponder, handleApiNotFound, json, parseBody, requestUrl } from "./helpers.ts";
 import { createPiAIRuntime, handlePiAIRequest } from "./ai-runtime.ts";
 
 import { buildAdvertisedUrl, isRemoteSession, listenOnPort } from "./network.ts";
@@ -546,6 +546,7 @@ export async function startAnnotateServer(options: {
 	let liveProxy: LiveAppProxy | null = null;
 	let liveSessionToken = "";
 	let liveAppUrl = "";
+	const serveHtml = createHtmlResponder(options.htmlContent);
 
 	const server = createServer(async (req, res) => {
 		const url = requestUrl(req);
@@ -998,7 +999,7 @@ export async function startAnnotateServer(options: {
 		} else if (url.pathname.startsWith("/api/")) {
 			handleApiNotFound(res, url.pathname);
 		} else {
-			html(res, options.htmlContent);
+			serveHtml(req, res);
 		}
 	});
 	const agentTerminal = await createNodeAgentTerminalBridge({

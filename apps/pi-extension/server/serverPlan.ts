@@ -27,7 +27,7 @@ import {
 	handleSaveNotesRequest,
 	handleUploadRequest,
 } from "./handlers.ts";
-import { handleApiNotFound, html, json, parseBody, requestUrl } from "./helpers.ts";
+import { createHtmlResponder, handleApiNotFound, json, parseBody, requestUrl } from "./helpers.ts";
 import { createPiAIRuntime, handlePiAIRequest } from "./ai-runtime.ts";
 import { openEditorDiff } from "./ide.ts";
 import {
@@ -166,6 +166,7 @@ export async function startPlanReviewServer(options: {
 
 	// Lazy cache for in-session archive tab
 	let cachedArchivePlans: ArchivedPlan[] | null = null;
+	const serveHtml = createHtmlResponder(options.htmlContent);
 
 	const server = createServer(async (req, res) => {
 		const url = requestUrl(req);
@@ -462,7 +463,7 @@ export async function startPlanReviewServer(options: {
 		} else if (url.pathname.startsWith("/api/")) {
 			handleApiNotFound(res, url.pathname);
 		} else {
-			html(res, options.htmlContent);
+			serveHtml(req, res);
 		}
 	});
 
