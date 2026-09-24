@@ -12,6 +12,7 @@
  */
 
 import { isRemoteSession, getServerHostname, startBunServerOnAvailablePort, buildAdvertisedUrl } from "./remote";
+import { serveAppShell, withAppShell } from "./app-shell";
 import { getRepoInfo } from "./repo";
 import type { Origin } from "@plannotator/shared/agents";
 import { handleImage, handleUpload, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleApiNotFound, handleFavicon, handleReferenceSkills, handleReferenceSkillContent, handleSaveNotes, readDraftGenerationFromBody, readDraftGenerationFromUrl } from "./shared-handlers";
@@ -692,7 +693,7 @@ export async function startAnnotateServer(
   let liveAppUrl = "";
 
   const server = await startBunServerOnAvailablePort((port) =>
-    Bun.serve({
+    Bun.serve(withAppShell(htmlContent, {
         hostname: getServerHostname(),
         port,
         // Bun's default 10s idleTimeout kills AI SSE streams that stall
@@ -1281,9 +1282,7 @@ export async function startAnnotateServer(
           if (framedMiss) return framedMiss;
 
           // Serve embedded HTML for all other routes (SPA)
-          return new Response(htmlContent, {
-            headers: { "Content-Type": "text/html" },
-          });
+          return serveAppShell(req, htmlContent);
         },
         websocket: agentTerminal.websocket,
 
@@ -1294,7 +1293,7 @@ export async function startAnnotateServer(
             { status: 500, headers: { "Content-Type": "text/plain" } },
           );
         },
-    }),
+    })),
   );
 
   const port = server.port!;
