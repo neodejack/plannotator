@@ -28,7 +28,8 @@
     "./pr": "./pr.ts",
     "./html-assets": "./html-assets.ts",
     "./guide-cli": "./guide/guide-cli.ts",
-    "./live-proxy": "./live-proxy.ts"
+    "./live-proxy": "./live-proxy.ts",
+    "./app-shell": "./app-shell.ts"
   },
   "files": [
     "*.ts",

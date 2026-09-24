@@ -6,7 +6,10 @@
  * and uncacheable, on every page load. Over a slow link (e.g. a Tailscale
  * connection to a remote runner) that is a ~10 s open for every session.
  *
- * This module keeps the build untouched and splits the page at runtime:
+ * The CLI prefers the code-split build embedded by
+ * scripts/fork/pack-split-assets.ts (see loadSplitBundle below), whose shell
+ * already references hashed `/_app/` files. For a single-file page this module
+ * splits it at runtime instead:
  *
  *   - the big inline `<script type="module">` and `<style>` bodies are moved to
  *     content-hashed URLs under `/_app/` and served `immutable`, so the browser
@@ -28,7 +31,7 @@ export const APP_ASSET_PREFIX = "/_app/";
 const EXTRACT_MIN_CHARS = 100_000;
 /** Responses smaller than this are not worth compressing. */
 const COMPRESS_MIN_BYTES = 1024;
-const COMPRESSIBLE_TYPE = /json|javascript|text\/(html|css|plain)|svg\+xml/i;
+const COMPRESSIBLE_TYPE = /json|javascript|wasm|text\/(html|css|plain)|svg\+xml/i;
 
 type Bytes = Uint8Array<ArrayBuffer>;
 
@@ -124,8 +127,88 @@ export function serveAppShell(req: Request, source: string): Response {
   return new Response(shell.html, { headers });
 }
 
+// --- Code-split UI bundle (scripts/fork/pack-split-assets.ts) ---------------
+
+export const SPLIT_BUNDLE_MAGIC = "PLANNOTATOR-SPLIT-UI v1";
+
+const CONTENT_TYPES: Record<string, string> = {
+  js: "text/javascript; charset=utf-8",
+  mjs: "text/javascript; charset=utf-8",
+  css: "text/css; charset=utf-8",
+  html: "text/html; charset=utf-8",
+  json: "application/json",
+  map: "application/json",
+  svg: "image/svg+xml",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  ico: "image/x-icon",
+  webm: "video/webm",
+  mp4: "video/mp4",
+  woff: "font/woff",
+  woff2: "font/woff2",
+  ttf: "font/ttf",
+  wasm: "application/wasm",
+  txt: "text/plain; charset=utf-8",
+};
+
+export function splitAssetContentType(path: string): string {
+  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+  return CONTENT_TYPES[ext] ?? "application/octet-stream";
+}
+
+interface SplitEntry {
+  type: string;
+  encoding: "utf8" | "base64";
+  start: number;
+  length: number;
+}
+
+let splitBody = "";
+const splitEntries = new Map<string, SplitEntry>();
+const splitAssets = new Map<string, ShellAsset>();
+
+/**
+ * Register the embedded code-split UI. Returns the small `index.html` shells
+ * for the plan and review apps (each absent when that app was not built
+ * split, in which case the caller keeps the single-file HTML). Only the header
+ * is parsed here; asset bodies are sliced out on first request.
+ */
+export function loadSplitBundle(text: string): { plan?: string; review?: string } {
+  const first = text.indexOf("\n");
+  const second = first < 0 ? -1 : text.indexOf("\n", first + 1);
+  if (second < 0 || text.slice(0, first) !== SPLIT_BUNDLE_MAGIC) return {};
+  const header = JSON.parse(text.slice(first + 1, second)) as {
+    plan?: string;
+    review?: string;
+    files: [string, string, "utf8" | "base64", number, number][];
+  };
+  splitBody = text.slice(second + 1);
+  splitEntries.clear();
+  splitAssets.clear();
+  for (const [path, type, encoding, start, length] of header.files) {
+    splitEntries.set(path, { type, encoding, start, length });
+  }
+  return { plan: header.plan, review: header.review };
+}
+
+function getSplitAsset(path: string): ShellAsset | undefined {
+  let asset = splitAssets.get(path);
+  if (asset) return asset;
+  const entry = splitEntries.get(path);
+  if (!entry) return undefined;
+  const raw = splitBody.slice(entry.start, entry.start + entry.length);
+  const body = (entry.encoding === "base64" ? Buffer.from(raw, "base64") : new TextEncoder().encode(raw)) as Bytes;
+  asset = { body: new Uint8Array(body.buffer, body.byteOffset, body.byteLength) as Bytes, type: entry.type };
+  splitAssets.set(path, asset);
+  return asset;
+}
+
 function serveAppAsset(req: Request, url: URL, source: string): Response {
-  const asset = getAppShell(source).assets.get(url.pathname);
+  const asset = getAppShell(source).assets.get(url.pathname) ?? getSplitAsset(url.pathname);
   if (!asset) {
     return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain" } });
   }
@@ -136,7 +219,7 @@ function serveAppAsset(req: Request, url: URL, source: string): Response {
     "X-Content-Type-Options": "nosniff",
     Vary: "Accept-Encoding",
   });
-  if (wantsGzip(req, url)) {
+  if (COMPRESSIBLE_TYPE.test(asset.type) && wantsGzip(req, url)) {
     asset.gzip ??= gzipSync(asset.body, { level: 6 });
     return gzipped(asset.gzip, headers);
   }

@@ -112,6 +112,7 @@ import {
 import { createWorktreePool, type WorktreePool, type PoolEntry } from "@plannotator/shared/worktree-pool";
 import { parsePRUrl, checkPRAuth, fetchPR, getCliName, getCliInstallUrl, getMRLabel, getMRNumberLabel, getDisplayRepo } from "@plannotator/server/pr";
 import { writeRemoteShareLink } from "@plannotator/server/share-url";
+import { loadSplitBundle } from "@plannotator/server/app-shell";
 import { enableTailscaleServe } from "@plannotator/server/tailscale-serve";
 import { writeUrlQr } from "@plannotator/server/qr";
 import { resolveAnnotateTarget } from "./annotate-resolution";
@@ -206,11 +207,17 @@ import {
 // Embed the built HTML at compile time
 // @ts-ignore - Bun import attribute for text
 import planHtml from "../dist/index.html" with { type: "text" };
-const planHtmlContent = planHtml as unknown as string;
-
 // @ts-ignore - Bun import attribute for text
 import reviewHtml from "../dist/review.html" with { type: "text" };
-const reviewHtmlContent = reviewHtml as unknown as string;
+// Fork: code-split UI (scripts/fork/pack-split-assets.ts), preferred over the
+// single-file HTML so remote browsers cache it. PLANNOTATOR_SINGLE_FILE_UI=1
+// forces the single-file pages.
+// @ts-ignore - Bun import attribute for text
+import splitUiBundle from "../dist/app-split.txt" with { type: "text" };
+const splitUi =
+  process.env.PLANNOTATOR_SINGLE_FILE_UI === "1" ? {} : loadSplitBundle(splitUiBundle as unknown as string);
+const planHtmlContent = splitUi.plan ?? (planHtml as unknown as string);
+const reviewHtmlContent = splitUi.review ?? (reviewHtml as unknown as string);
 
 // Check for subcommand
 const rawArgs = process.argv.slice(2);

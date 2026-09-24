@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { gunzipSync } from "bun";
-import { APP_ASSET_PREFIX, buildAppShell, serveAppShell, withAppShell } from "./app-shell";
+import { APP_ASSET_PREFIX, SPLIT_BUNDLE_MAGIC, buildAppShell, loadSplitBundle, serveAppShell, withAppShell } from "./app-shell";
 
 const BIG_JS = `console.log("app");/*${"x".repeat(150_000)}*/`;
 const BIG_CSS = `body{color:red}/*${"y".repeat(150_000)}*/`;
@@ -117,5 +117,53 @@ describe("withAppShell server", () => {
     const res = await fetch(base + "/api/stream", { headers: remote, decompress: false });
     expect(res.headers.get("content-encoding")).toBeNull();
     expect((await res.text()).startsWith("data: ")).toBe(true);
+  });
+});
+
+describe("loadSplitBundle", () => {
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  afterEach(() => {
+    server?.stop(true);
+    server = undefined;
+  });
+
+  // Same layout scripts/fork/pack-split-assets.ts writes.
+  function bundle(files: [string, string, "utf8" | "base64", string][], html: { plan?: string; review?: string }) {
+    let offset = 0;
+    const header = { ...html, files: files.map(([p, t, e, body]) => { const row = [p, t, e, offset, body.length]; offset += body.length; return row; }) };
+    return `${SPLIT_BUNDLE_MAGIC}\n${JSON.stringify(header)}\n${files.map((f) => f[3]).join("")}`;
+  }
+
+  test("serves embedded text and binary assets byte-identically, immutable", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 255, 1, 2]);
+    const shellHtml = '<html><head><script type="module" crossorigin src="/_app/index-a.js"></script></head></html>';
+    const ui = loadSplitBundle(
+      bundle(
+        [
+          ["/_app/index-a.js", "text/javascript; charset=utf-8", "utf8", 'import("./chunk-é.js")'],
+          ["/_app/sprite-b.png", "image/png", "base64", Buffer.from(png).toString("base64")],
+        ],
+        { plan: shellHtml },
+      ),
+    );
+    expect(ui.plan).toBe(shellHtml);
+    expect(ui.review).toBeUndefined();
+
+    server = Bun.serve(withAppShell(ui.plan!, { hostname: "127.0.0.1", port: 0, fetch: (req) => serveAppShell(req, ui.plan!) }));
+    const base = `http://127.0.0.1:${server.port}`;
+    expect(await (await fetch(base + "/")).text()).toBe(shellHtml);
+    const js = await fetch(base + "/_app/index-a.js");
+    expect(js.headers.get("cache-control")).toContain("immutable");
+    expect(await js.text()).toBe('import("./chunk-é.js")');
+    const img = await fetch(base + "/_app/sprite-b.png", { headers: { Host: "runner.example.ts.net", "Accept-Encoding": "gzip" }, decompress: false });
+    expect(img.headers.get("content-type")).toBe("image/png");
+    // Already-compressed media is not gzipped again.
+    expect(img.headers.get("content-encoding")).toBeNull();
+    expect(new Uint8Array(await img.arrayBuffer())).toEqual(png);
+  });
+
+  test("an unrecognized bundle yields no split UI, so the single-file pages are used", () => {
+    expect(loadSplitBundle("")).toEqual({});
+    expect(loadSplitBundle("something else\n{}\n")).toEqual({});
   });
 });
