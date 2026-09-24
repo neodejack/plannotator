@@ -1,3 +1,27 @@
+## This checkout is a personal fork
+
+This is neodejack's fork of backnotprop/plannotator. Read `FORK.md` before changing
+serving, build, or install code. Never open PRs against upstream.
+
+- Keep fork changes in new files (`packages/server/app-shell.ts`, `scripts/fork/`,
+  `*.split.config.ts`). Upstream files carry only the few lines listed in `FORK.md`;
+  every extra line there is a future merge conflict.
+- Any `Bun.serve` that serves the UI must be `Bun.serve(withAppShell(htmlContent, {...}))`
+  with the SPA catch-all `return serveAppShell(req, htmlContent)`. Without it the page
+  goes back to 24 MB, uncached, per remote open.
+- `/_app/` is reserved for hashed, immutable UI assets. Route nothing else there.
+- Leave `apps/{hook,review}/vite.config.ts` as upstream has them. The split build
+  derives from them.
+- The CLI imports `apps/hook/dist/app-split.txt`. Always build with
+  `bun run --cwd apps/review build && bun run build:hook`, which writes it; skipping
+  it breaks the CLI at startup.
+- This machine is the remote runner Amp calls. To ship a change, run
+  `scripts/fork/build-binary.sh` and copy `dist/plannotator-fork` over
+  `~/.local/bin/plannotator`. The upstream binary is backed up at
+  `~/.local/bin/plannotator.upstream-0.27.19`.
+- After merging upstream, run `bun test packages/server/app-shell.test.ts`, rebuild,
+  and check that a remote-style request for `/` still returns the ~1 KB shell.
+
 # Plannotator
 
 A plan review UI for Claude Code that intercepts `ExitPlanMode` via hooks, letting users approve or request changes with annotated feedback. Also provides code review for git diffs and annotation of arbitrary markdown files.
